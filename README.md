@@ -53,6 +53,31 @@ The obvious move, paying more for deliveries in extreme heat, rewards the most f
 - **Safe to report.** The "I feel unwell" button never affects pay or rating, so people use it.
 - **Demand is moved, not dropped.** Orders that fall in the stop window are moved to cooler hours, with a ready-made customer message.
 
+### How a fleet starts using it (about 15 minutes)
+
+1. **Zones:** the hubs or sites where workers operate. Heat risk is computed per zone.
+2. **Roster CSV** exported from HR or a workforce system (see the [sample](frontend/public/sample_roster.csv)): `worker_id, name, phone, zone, shift_start, shift_end, join_date, type, language, channel`.
+   - It is validated row by row (unknown zone, bad phone, bad dates, duplicate IDs). You get a report before anything is written.
+   - Re-uploading updates existing workers, and every uploaded file is archived to S3.
+   - **`join_date` drives the stricter new-joiner limits.**
+3. **Rest points:** suggested from Amazon Location Service. The manager marks the ones they have a partnership with.
+4. From then on it runs daily: **18:00 plan → manager approves → workers are notified**. At 05:30 the plan is refreshed, and the manager is alerted only if the heat got worse.
+
+### How the plan reaches workers
+
+Nothing reaches workers until a manager **approves** the plan. Approval builds one message per worker in their **language** (Hindi or English) on their **channel**:
+
+| Channel | Who it's for | Delivery (production) |
+|---|---|---|
+| 💬 WhatsApp | Most workers | AWS End User Messaging Social: a WhatsApp template with **I'm OK / I feel unwell** quick replies |
+| ✉️ SMS | Workers without WhatsApp | AWS End User Messaging SMS |
+| 📞 Voice call | Feature phones, or workers who can't read | Outbound call with an Amazon Polly Hindi or English voice |
+| 📱 Fleet app | Large platforms with their own rider app | Webhook to their app's push notifications |
+
+The demo builds and shows the full outbox (**Worker messages** tab) but doesn't send it. WhatsApp templates need Meta business verification, and SMS in India needs DLT registration.
+
+**Safety does not depend on the worker reading the message.** The dispatch check refuses Extreme-hour assignments either way. Messages explain the change; the dispatch block enforces it.
+
 ---
 
 ## Architecture
@@ -108,6 +133,7 @@ flowchart LR
 - `ZONE#<id>`, `WORKER#<id>`, `REST#<id>`: zones, roster and rest points
 - `RISK#<date>#<zone>`: hourly WBGT and risk band per zone
 - `PLAN#<date>`: KPIs, actions and worker cards
+- `OUTBOX#<date>`: per-worker messages released on approval
 - `OVERRIDE#<date>#<ts>`: the manager override audit log
 - `CHECKIN#<date>#<ts>#<worker>`: worker check-ins
 
@@ -144,7 +170,8 @@ flowchart LR
 | GET | `/fleets/{id}/plans/{date}` | Plan with hourly risk, overrides and check-ins |
 | POST | `/fleets/{id}/plans` | Start a planning run (`{"date": "YYYY-MM-DD"}` optional) |
 | GET | `/fleets/{id}/runs/{run}` | Live progress of a run (per-step state) |
-| POST | `/fleets/{id}/plans/{date}/approve` | Manager approves the plan |
+| POST | `/fleets/{id}/plans/{date}/approve` | Manager approves the plan; builds the worker outbox and emails a summary |
+| POST | `/fleets/{id}/roster` | Import a roster CSV (`{"csv": "...", "dry_run": true}` validates only) |
 | GET | `/fleets/{id}/workers/{wid}/card?date=` | Worker card |
 | GET | `/fleets/{id}/dispatch-check?zone=&at=&worker=` | Is this assignment allowed? |
 | POST | `/fleets/{id}/overrides` | Log a manager override (reason required) |

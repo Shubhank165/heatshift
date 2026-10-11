@@ -6,12 +6,13 @@ from datetime import datetime
 
 import boto3
 
-from heatshift import heat, store, weather
+from heatshift import heat, notify, onboarding, store, weather
 from heatshift.planner import DEFAULT_POLICY
 
 sns = boto3.client("sns")
 sfn = boto3.client("stepfunctions")
 TOPIC_ARN = os.environ.get("ALERT_TOPIC_ARN", "")
+APP_URL = os.environ.get("APP_URL", "")
 STATE_MACHINE_ARN = os.environ.get("STATE_MACHINE_ARN", "")
 LOCKED_POLICY = {"heat_surge_pay": False}  # never configurable, by design
 
@@ -41,6 +42,7 @@ def get_plan(fid, d, **_):
     p["risk"] = {r["zone"]: r["hours"] for r in store.query(fid, f"RISK#{d}#")}
     p["overrides"] = store.query(fid, f"OVERRIDE#{d}")
     p["checkins"] = store.query(fid, f"CHECKIN#{d}")
+    p["outbox"] = store.get(fid, f"OUTBOX#{d}")
     return 200, p
 
 
@@ -50,7 +52,37 @@ def approve_plan(fid, d, body, **_):
         return 404, {"error": "no plan for this date"}
     p.update(status="APPROVED", approved_at=_now(), approved_by=body.get("by", "manager"))
     store.put(fid, f"PLAN#{d}", p)
-    return 200, {"status": "APPROVED", "approved_at": p["approved_at"]}
+    # Approval is what releases the plan to workers: build their messages.
+    outbox = notify.build_outbox(p, store.query(fid, "WORKER#"), APP_URL)
+    outbox["created_at"] = _now()
+    store.put(fid, f"OUTBOX#{d}", outbox)
+    if TOPIC_ARN:
+        chans = ", ".join(f"{n} {c}" for c, n in sorted(outbox["by_channel"].items(), key=lambda x: -x[1]))
+        sns.publish(TopicArn=TOPIC_ARN, Subject=f"HeatShift: plan for {d} approved, {len(outbox['messages'])} workers notified",
+                    Message=f"The heat plan for {d} was approved at {p['approved_at']}.\n"
+                            f"{len(outbox['messages'])} worker messages queued: {chans}.\n{APP_URL}")
+    return 200, {"status": "APPROVED", "approved_at": p["approved_at"], "messages": len(outbox["messages"])}
+
+
+def import_roster(fid, body, **_):
+    """POST {"csv": "...", "dry_run": true|false}. Upserts workers; the raw file is archived in S3."""
+    text = body.get("csv") or ""
+    if not text.strip():
+        return 400, {"error": "csv is empty"}
+    zones = store.query(fid, "ZONE#")
+    workers, errors = onboarding.parse_roster(text, zones)
+    existing = {w["id"] for w in store.query(fid, "WORKER#")}
+    report = {"valid": len(workers), "errors": errors,
+              "new": sum(w["id"] not in existing for w in workers),
+              "updated": sum(w["id"] in existing for w in workers),
+              "preview": workers[:50], "dry_run": bool(body.get("dry_run"))}
+    if body.get("dry_run") or not workers:
+        return 200, report
+    key = store.put_upload(fid, "roster", text)
+    with store.TABLE.batch_writer() as batch:
+        for w in workers:
+            batch.put_item(Item=store._to_ddb({**w, "pk": store.pk(fid), "sk": f"WORKER#{w['id']}"}))
+    return 200, {**report, "imported": len(workers), "archived_to": f"s3://{store.BUCKET}/{key}"}
 
 
 def worker_card(fid, wid, query, **_):
@@ -171,6 +203,7 @@ ROUTES = [
     ("GET", r"^/fleets/(?P<fid>[\w-]+)/plans/(?P<d>\d{4}-\d{2}-\d{2})$", get_plan),
     ("POST", r"^/fleets/(?P<fid>[\w-]+)/plans/(?P<d>\d{4}-\d{2}-\d{2})/approve$", approve_plan),
     ("POST", r"^/fleets/(?P<fid>[\w-]+)/plans$", run_plan),
+    ("POST", r"^/fleets/(?P<fid>[\w-]+)/roster$", import_roster),
     ("GET", r"^/fleets/(?P<fid>[\w-]+)/runs/(?P<run>[\w-]+)$", run_status),
     ("GET", r"^/fleets/(?P<fid>[\w-]+)/workers/(?P<wid>\w+)/card$", worker_card),
     ("GET", r"^/fleets/(?P<fid>[\w-]+)/dispatch-check$", dispatch_check),

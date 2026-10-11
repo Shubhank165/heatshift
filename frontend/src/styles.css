@@ -110,6 +110,33 @@ td.changed { font-weight: 600; }
 .error-inline { color: #b42318; margin-bottom: 6px; }
 .leaflet-container { cursor: grab; }
 
+.empty { padding: 20px 4px; }
+.note { background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 10px; padding: 8px 12px; margin: 10px 0; }
+.chip-btn { background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+.chip-btn.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.msgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; max-height: 620px; overflow-y: auto; padding: 2px; }
+.msg { border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: #efeae2; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.msg.sms { background: #f2f4f7; }
+.msg.voice { background: #fdf2fa; }
+.msg.app { background: #eff4ff; }
+.msg-head { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; }
+.msg-ch { margin-left: auto; font-size: 12px; color: var(--muted); }
+.bubble { background: #fff; border-radius: 0 10px 10px 10px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; font-size: 13px; box-shadow: 0 1px 0 rgba(0,0,0,.06); }
+.msg.whatsapp .bubble { background: #d9fdd3; border-radius: 10px 0 10px 10px; }
+.qr { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.qr span { background: #fff; text-align: center; border-radius: 8px; padding: 6px; color: #027eb5; font-weight: 600; font-size: 13px; }
+.steps-v { display: flex; flex-direction: column; gap: 16px; }
+.sv { display: flex; gap: 12px; align-items: flex-start; }
+.sv-n { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--ink); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+.zone-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+.good-chip { background: #dcfae6; color: #085d3a; }
+.file { position: relative; overflow: hidden; }
+.file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.report { margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.ok-n { color: var(--good); font-weight: 700; }
+.bad-n { color: #b42318; font-weight: 600; }
+.errs { color: #b42318; margin: 8px 0; padding-left: 18px; }
+
 footer { margin: 8px 0 24px; }
 
 /* worker card */

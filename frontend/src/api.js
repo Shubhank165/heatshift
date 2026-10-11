@@ -18,6 +18,7 @@ export const api = {
   approve: (date) => call("POST", `/fleets/${FLEET}/plans/${date}/approve`, { by: "manager" }),
   runPlan: (date) => call("POST", `/fleets/${FLEET}/plans`, date ? { date } : {}),
   run: (id) => call("GET", `/fleets/${FLEET}/runs/${id}`),
+  importRoster: (csv, dryRun) => call("POST", `/fleets/${FLEET}/roster`, { csv, dry_run: dryRun }),
   card: (wid, date) => call("GET", `/fleets/${FLEET}/workers/${wid}/card?date=${date}`),
   dispatchCheck: (zone, at, worker) =>
     call("GET", `/fleets/${FLEET}/dispatch-check?zone=${zone}&at=${at}${worker ? `&worker=${worker}` : ""}`),

@@ -74,3 +74,10 @@ def put_raw(fleet_id, plan_date, run_id, payload):
 
 def get_raw(key):
     return json.loads(_s3.get_object(Bucket=BUCKET, Key=key)["Body"].read())
+
+
+def put_upload(fleet_id, kind, text):
+    from datetime import datetime, timezone
+    key = f"uploads/fleet={fleet_id}/{kind}/{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.csv"
+    _s3.put_object(Bucket=BUCKET, Key=key, Body=text.encode(), ContentType="text/csv")
+    return key

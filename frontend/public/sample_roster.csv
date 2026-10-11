@@ -1,0 +1,14 @@
+worker_id,name,phone,zone,shift_start,shift_end,join_date,type,language,channel
+W121,Ramesh Kumar,+91 98100 00121,Z1,07:00,15:00,2024-11-02,employee,hi,whatsapp
+W122,Sunita Devi,9810000122,Cyber City,11:00,19:00,2026-10-06,gig,hi,whatsapp
+W123,Arjun Mehta,+91 98100 00123,Z2,09:00,17:00,2025-06-14,employee,en,whatsapp
+W124,Mohammed Irfan,+91 98100 00124,Sector 29 / MG Road,13:00,21:00,2026-10-08,gig,hi,app
+W125,Kavita Sharma,+91 98100 00125,Z3,07:00,15:00,2025-02-20,employee,hi,sms
+W126,Rajesh Yadav,+91 98100 00126,Sohna Road,11:00,19:00,2026-10-03,contract,hi,voice
+W127,Priya Nair,+91 98100 00127,Z4,09:00,17:00,2025-09-01,employee,en,whatsapp
+W128,Sandeep Singh,+91 98100 00128,Golf Course Road,11:00,19:00,2026-10-09,gig,hi,whatsapp
+W129,Lakshmi Rao,+91 98100 00129,Z5,07:00,15:00,2024-12-15,employee,en,app
+W130,Bablu Prasad,+91 98100 00130,Palam Vihar,13:00,21:00,2026-10-01,contract,hi,voice
+W131,Neeraj Chauhan,+91 98100 00131,Z6,09:00,17:00,2025-04-10,gig,hi,whatsapp
+W132,Farida Begum,+91 98100 00132,New Gurugram (Sec 82),11:00,19:00,2026-10-07,employee,hi,sms
+W133,Test Row,+91 98100 00133,Noida Sector 62,09:00,17:00,2025-01-01,gig,hi,whatsapp

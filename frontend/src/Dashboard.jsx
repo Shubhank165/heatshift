@@ -282,6 +282,163 @@ function Live({ plan, reload }) {
   );
 }
 
+const CHANNEL = {
+  whatsapp: { icon: "💬", label: "WhatsApp" },
+  sms: { icon: "✉️", label: "SMS" },
+  voice: { icon: "📞", label: "Voice call" },
+  app: { icon: "📱", label: "Fleet app push" },
+};
+
+function Messages({ plan }) {
+  const [ch, setCh] = useState("all");
+  const ob = plan.outbox;
+  if (!ob) {
+    return (
+      <div className="empty">
+        <p><b>Nothing is sent to workers until the plan is approved.</b></p>
+        <p className="muted">Approving builds one message per worker in their language and on their channel:
+          WhatsApp, SMS, a voice call, or a push through the fleet's own app.</p>
+      </div>
+    );
+  }
+  const msgs = ob.messages.filter((m) => ch === "all" || m.channel === ch);
+  return (
+    <div>
+      <div className="row gap wrap">
+        <button className={`chip-btn ${ch === "all" ? "on" : ""}`} onClick={() => setCh("all")}>All · {ob.messages.length}</button>
+        {Object.entries(ob.by_channel).map(([c, n]) => (
+          <button key={c} className={`chip-btn ${ch === c ? "on" : ""}`} onClick={() => setCh(c)}>
+            {CHANNEL[c]?.icon} {CHANNEL[c]?.label} · {n}
+          </button>
+        ))}
+        <span className="muted small">Hindi {ob.by_language.hi || 0} · English {ob.by_language.en || 0} · queued {ob.created_at?.slice(11, 16)}</span>
+      </div>
+      <p className="note small">
+        Preview of the outbox. Live delivery uses AWS End User Messaging (WhatsApp Business templates and SMS), Amazon Polly
+        voice calls, or a webhook to the fleet's rider app. WhatsApp templates need Meta business verification, and SMS in India needs
+        DLT registration, so nothing is sent from this demo.
+      </p>
+      <div className="msgs">
+        {msgs.slice(0, 60).map((m) => (
+          <div key={m.worker_id} className={`msg ${m.channel}`}>
+            <div className="msg-head">
+              <b>{m.name}</b> <span className="muted small">{m.worker_id} · {m.zone}</span>
+              <span className="msg-ch">{CHANNEL[m.channel]?.icon} {m.to}</span>
+            </div>
+            <div className="bubble">{m.channel === "voice" && <div className="small muted">🔊 Spoken message:</div>}{m.body}</div>
+            {m.buttons.length > 0 && (
+              <div className="qr">{m.buttons.map((b) => <span key={b}>{b}</span>)}</div>
+            )}
+            <div className="muted small">via {m.via}</div>
+          </div>
+        ))}
+      </div>
+      {msgs.length > 60 && <p className="muted small">Showing 60 of {msgs.length}.</p>}
+    </div>
+  );
+}
+
+function Setup({ fleet, onImported }) {
+  const [csv, setCsv] = useState("");
+  const [file, setFile] = useState("");
+  const [report, setReport] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const pick = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    setFile(f.name); setReport(null); setErr("");
+    const text = await f.text();
+    setCsv(text);
+    validate(text);
+  };
+  const validate = async (text = csv) => {
+    setBusy(true);
+    try { setReport(await api.importRoster(text, true)); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+  const doImport = async () => {
+    setBusy(true);
+    try { const r = await api.importRoster(csv, false); setReport(r); onImported(); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+  const loadSample = async () => {
+    const text = await fetch("sample_roster.csv").then((r) => r.text());
+    setFile("sample_roster.csv"); setCsv(text); validate(text);
+  };
+  return (
+    <div className="setup">
+      <div className="steps-v">
+        <div className="sv">
+          <div className="sv-n">1</div>
+          <div>
+            <b>Zones</b> <span className="muted">· where your workers operate. Heat risk is computed per zone.</span>
+            <div className="zone-chips">{fleet.zones.map((z) => <span key={z.id} className="chip">{z.id} · {z.name}</span>)}</div>
+          </div>
+        </div>
+        <div className="sv">
+          <div className="sv-n">2</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <b>Roster</b> <span className="muted">· export it from your HR or workforce system as CSV. {fleet.workers.length} workers on file.</span>
+            <p className="muted small">Columns: <code>worker_id, name, phone, zone, shift_start, shift_end, join_date, type, language, channel</code>.
+              Zone can be the ID or the name. <b>join_date</b> drives the stricter limits for new joiners.
+              Re-uploading updates existing workers.</p>
+            <div className="row gap wrap">
+              <label className="btn ghost file">📄 Choose CSV<input type="file" accept=".csv,text/csv" onChange={pick} /></label>
+              <button className="btn ghost" onClick={loadSample}>Try the sample roster</button>
+              <a className="small" href="sample_roster.csv" download>Download sample CSV</a>
+              {file && <span className="muted small">{file}</span>}
+            </div>
+            {busy && <p className="muted">Checking…</p>}
+            {err && <p className="error-inline">{err}</p>}
+            {report && (
+              <div className="report">
+                <div className="row gap wrap">
+                  <span className="ok-n">✓ {report.valid} valid</span>
+                  <span className="muted">{report.new} new · {report.updated} updated</span>
+                  {report.errors.length > 0 && <span className="bad-n">✕ {report.errors.length} row{report.errors.length > 1 ? "s" : ""} with errors (skipped)</span>}
+                  {report.dry_run && report.valid > 0 && (
+                    <button className="btn" onClick={doImport} disabled={busy}>Import {report.valid} workers</button>
+                  )}
+                  {report.imported && <span className="approved">Imported {report.imported} workers. Re-plan to include them.</span>}
+                </div>
+                {report.errors.length > 0 && (
+                  <ul className="errs">{report.errors.map((e) => <li key={e.row}>Row {e.row}{e.worker_id ? ` (${e.worker_id})` : ""}: {e.error}</li>)}</ul>
+                )}
+                {report.archived_to && <p className="muted small">Original file archived to <code>{report.archived_to}</code></p>}
+                <div className="table-wrap" style={{ maxHeight: 260 }}>
+                  <table>
+                    <thead><tr><th>ID</th><th>Name</th><th>Zone</th><th>Shift</th><th>Joined</th><th>Type</th><th>Lang</th><th>Channel</th></tr></thead>
+                    <tbody>{report.preview.map((w) => (
+                      <tr key={w.id}><td>{w.id}</td><td>{w.name}</td><td>{w.zone}</td>
+                        <td>{String(w.shift_start).padStart(2, "0")}–{String(w.shift_end).padStart(2, "0")}</td>
+                        <td>{w.join_date}</td><td>{w.type}</td><td>{w.language}</td><td>{CHANNEL[w.channel]?.icon} {w.channel}</td></tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="sv">
+          <div className="sv-n">3</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <b>Cool rest points</b> <span className="muted">· suggested from Amazon Location Service (malls, fuel stations). Partner points are marked ✓.</span>
+            <div className="zone-chips">
+              {fleet.rest_points.filter((p) => p.designated).map((p) => <span key={p.id} className="chip good-chip">✓ {p.name}</span>)}
+              <span className="muted small">+ {fleet.rest_points.filter((p) => !p.designated).length} candidates on the map</span>
+            </div>
+          </div>
+        </div>
+        <div className="sv">
+          <div className="sv-n">4</div>
+          <div><b>Every day, automatically</b>
+            <span className="muted"> · 18:00 plan for tomorrow → you approve → workers get their message · 05:30 refresh, and you're alerted only if the heat got worse.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Policy({ fleet }) {
   const p = fleet.meta.policy;
   const rows = [
@@ -332,7 +489,7 @@ export default function Dashboard() {
 
   const approve = async () => {
     setBusy("approve");
-    try { await api.approve(date); await loadPlan(); } catch (e) { alert(e.message); } finally { setBusy(""); }
+    try { await api.approve(date); await loadPlan(); setTab("messages"); } catch (e) { alert(e.message); } finally { setBusy(""); }
   };
   const runTomorrow = async () => {
     clearTimeout(poll.current);
@@ -387,7 +544,9 @@ export default function Dashboard() {
           {plan.status === "APPROVED" ? (
             <span className="approved">✓ Approved {plan.approved_at?.slice(11, 16)}</span>
           ) : (
-            <button className="btn" onClick={approve} disabled={busy === "approve"}>Approve plan</button>
+            <button className="btn" onClick={approve} disabled={busy === "approve"}>
+              {busy === "approve" ? "Approving…" : "Approve & notify workers"}
+            </button>
           )}
         </div>
       </header>
@@ -420,7 +579,7 @@ export default function Dashboard() {
 
       <section className="card">
         <nav className="tabs">
-          {[["actions", "Recommended actions"], ["workers", "Workers"], ["dispatch", "Dispatch check"], ["live", "Live"], ["policy", "Policy"]].map(([id, label]) => (
+          {[["actions", "Recommended actions"], ["workers", "Workers"], ["messages", "Worker messages"], ["dispatch", "Dispatch check"], ["live", "Live"], ["setup", "Setup"], ["policy", "Policy"]].map(([id, label]) => (
             <button key={id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>{label}</button>
           ))}
         </nav>
@@ -428,6 +587,8 @@ export default function Dashboard() {
         {tab === "workers" && <Workers plan={plan} />}
         {tab === "dispatch" && <Dispatch plan={plan} />}
         {tab === "live" && <Live plan={plan} reload={() => loadPlan()} />}
+        {tab === "messages" && <Messages plan={plan} />}
+        {tab === "setup" && <Setup fleet={fleet} onImported={() => loadFleet()} />}
         {tab === "policy" && <Policy fleet={fleet} />}
       </section>
 

@@ -214,6 +214,7 @@ Resources:
           STATE_MACHINE_ARN: !Ref DailyPlanStateMachine
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref Table }
+        - S3WritePolicy: { BucketName: !Ref DataBucket }
         - SNSPublishMessagePolicy: { TopicName: !GetAtt AlertTopic.TopicName }
         - StepFunctionsExecutionPolicy: { StateMachineName: !GetAtt DailyPlanStateMachine.Name }
         - Statement:
