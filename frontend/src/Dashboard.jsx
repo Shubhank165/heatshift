@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from "react-leaflet";
 import { api, BANDS, inr } from "./api.js";
 
 const HOURS = Array.from({ length: 16 }, (_, i) => i + 6); // 06..21
@@ -67,10 +67,23 @@ function Heatmap({ plan, hour, setHour }) {
   );
 }
 
+function FitZones({ zones }) {
+  const map = useMap();
+  useEffect(() => {
+    map.fitBounds(zones.map((z) => [z.lat, z.lon]), { padding: [40, 40] });
+    const ro = new ResizeObserver(() => map.invalidateSize());
+    ro.observe(map.getContainer());
+    return () => ro.disconnect();
+  }, [map]);
+  return null;
+}
+
 function ZoneMap({ fleet, plan, hour }) {
   const center = [fleet.meta.hub.lat, fleet.meta.hub.lon];
   return (
-    <MapContainer center={center} zoom={11} scrollWheelZoom={false} className="map">
+    <MapContainer center={center} zoom={11} scrollWheelZoom wheelPxPerZoomLevel={90} zoomSnap={0.5}
+      zoomDelta={0.5} touchZoom doubleClickZoom className="map">
+      <FitZones zones={plan.zones} />
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -95,6 +108,47 @@ function ZoneMap({ fleet, plan, hour }) {
         </CircleMarker>
       ))}
     </MapContainer>
+  );
+}
+
+const STEP_ICON = { done: "✓", running: "", retrying: "↻", failed: "✕", pending: "" };
+
+function RunProgress({ run, onClose }) {
+  const steps = run.steps || [];
+  const done = steps.filter((s) => s.state === "done").length;
+  const running = steps.some((s) => s.state === "running" || s.state === "retrying");
+  const pct = run.status === "SUCCEEDED" ? 100 : Math.round(((done + (running ? 0.5 : 0)) / Math.max(steps.length, 4)) * 100);
+  const finished = run.status !== "RUNNING" && run.status !== "STARTING";
+  return (
+    <section className={`card run ${run.status === "SUCCEEDED" ? "ok" : ""} ${run.error || run.status === "FAILED" ? "bad" : ""}`}>
+      <div className="run-head">
+        <b>
+          {run.status === "SUCCEEDED" ? `Plan ready for ${run.date}` :
+            run.error || run.status === "FAILED" ? "Planning failed" : "Planning tomorrow with the latest forecast…"}
+        </b>
+        <span className="muted small">
+          Step Functions · {run.elapsed != null ? `${run.elapsed.toFixed(1)}s` : ""}
+        </span>
+        {finished && <button className="btn ghost small-btn" onClick={onClose}>Close</button>}
+      </div>
+      <div className="bar"><div className="bar-fill" style={{ width: `${pct}%` }} /></div>
+      <ol className="steps">
+        {(steps.length ? steps : [{ id: "start", label: "Starting workflow", state: "running" }]).map((s) => (
+          <li key={s.id} className={`step ${s.state}`}>
+            <span className="step-dot">{STEP_ICON[s.state]}</span>
+            <span>{s.label}</span>
+            <span className="muted small step-state">{s.state === "pending" ? "" : s.state}</span>
+          </li>
+        ))}
+      </ol>
+      {run.error && <div className="error-inline">{run.error}</div>}
+      {run.status === "SUCCEEDED" && run.kpis && (
+        <div className="muted small">
+          Peak {BANDS[run.kpis.peak_band]?.label} · WBGT {run.kpis.peak_wbgt}°C · {run.kpis.shifts_changed}/{run.kpis.workers} shifts
+          restructured · {run.kpis.new_joiners} new joiners · now showing this plan below.
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -259,6 +313,9 @@ export default function Dashboard() {
   const [tab, setTab] = useState("actions");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
+  const [run, setRun] = useState(null);
+  const poll = useRef(null);
+  useEffect(() => () => clearTimeout(poll.current), []);
 
   const loadFleet = async () => {
     const f = await api.fleet();
@@ -273,11 +330,37 @@ export default function Dashboard() {
   useEffect(() => { loadFleet().catch((e) => setErr(e.message)); }, []);
   useEffect(() => { loadPlan().catch((e) => setErr(e.message)); }, [date]);
 
-  const approve = async () => { setBusy("approve"); await api.approve(date); await loadPlan(); setBusy(""); };
+  const approve = async () => {
+    setBusy("approve");
+    try { await api.approve(date); await loadPlan(); } catch (e) { alert(e.message); } finally { setBusy(""); }
+  };
   const runTomorrow = async () => {
+    clearTimeout(poll.current);
     setBusy("run");
-    await api.runPlan();
-    setTimeout(async () => { await loadFleet(); setBusy(""); }, 12000);
+    const t0 = Date.now();
+    setRun({ status: "STARTING", steps: [], elapsed: 0 });
+    const fail = (e) => { setRun((r) => ({ ...r, status: "FAILED", error: e.message || String(e) })); setBusy(""); };
+    try {
+      const { run: id } = await api.runPlan();
+      const tick = async () => {
+        try {
+          const r = await api.run(id);
+          const elapsed = (Date.now() - t0) / 1000;
+          setRun({ ...r, elapsed });
+          if (r.status === "RUNNING") {
+            if (elapsed > 120) return fail(new Error("Timed out waiting for the workflow"));
+            poll.current = setTimeout(tick, 700);
+            return;
+          }
+          if (r.status !== "SUCCEEDED") return fail(new Error(`Workflow ${r.status.toLowerCase()}`));
+          await loadFleet();
+          setDate(r.date);
+          await loadPlan(r.date);
+          setBusy("");
+        } catch (e) { fail(e); }
+      };
+      tick();
+    } catch (e) { fail(e); }
   };
 
   const k = plan?.kpis;
@@ -308,6 +391,8 @@ export default function Dashboard() {
           )}
         </div>
       </header>
+
+      {run && <RunProgress run={run} onClose={() => setRun(null)} />}
 
       <section className="banner" style={{ borderColor: peakBand.color }}>
         <BandPill band={k.peak_band} />

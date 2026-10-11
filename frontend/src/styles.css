@@ -87,6 +87,29 @@ td.changed { font-weight: 600; }
 .feed li.unwell { color: #b42318; }
 .policy table td { white-space: normal; }
 .locked { margin-top: 12px; background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 10px; padding: 12px; }
+.run { border-left: 6px solid #1d4ed8; }
+.run.ok { border-left-color: var(--good); }
+.run.bad { border-left-color: #b42318; }
+.run-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.run-head .muted { margin-left: auto; }
+.small-btn { padding: 4px 10px; font-size: 12px; }
+.bar { height: 8px; background: #eef0f4; border-radius: 999px; overflow: hidden; margin-bottom: 12px; }
+.bar-fill { height: 100%; background: linear-gradient(90deg, #1d4ed8, #0b7a4b); border-radius: 999px; transition: width .5s ease; }
+.run.bad .bar-fill { background: #b42318; }
+.steps { list-style: none; margin: 0 0 8px; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.step { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); }
+.step.done { color: var(--ink); background: #ecfdf3; border-color: #abefc6; }
+.step.running, .step.retrying { color: var(--ink); background: #eff4ff; border-color: #b2ccff; }
+.step.failed { color: #b42318; background: #fef3f2; border-color: #fecdca; }
+.step-state { margin-left: auto; text-transform: capitalize; }
+.step-dot { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 2px solid #d0d5dd; display: grid; place-items: center; font-size: 11px; font-weight: 700; }
+.step.done .step-dot { background: var(--good); border-color: var(--good); color: #fff; }
+.step.failed .step-dot { background: #b42318; border-color: #b42318; color: #fff; }
+.step.running .step-dot, .step.retrying .step-dot { border-color: #1d4ed8; border-top-color: transparent; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.error-inline { color: #b42318; margin-bottom: 6px; }
+.leaflet-container { cursor: grab; }
+
 footer { margin: 8px 0 24px; }
 
 /* worker card */
@@ -116,4 +139,5 @@ footer { margin: 8px 0 24px; }
   .kpis { grid-template-columns: repeat(2, 1fr); }
   .grid, .two { grid-template-columns: 1fr; }
   .map { height: 300px; }
+  .steps { grid-template-columns: 1fr 1fr; }
 }

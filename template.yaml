@@ -216,6 +216,10 @@ Resources:
         - DynamoDBCrudPolicy: { TableName: !Ref Table }
         - SNSPublishMessagePolicy: { TopicName: !GetAtt AlertTopic.TopicName }
         - StepFunctionsExecutionPolicy: { StateMachineName: !GetAtt DailyPlanStateMachine.Name }
+        - Statement:
+            - Effect: Allow
+              Action: [states:DescribeExecution, states:GetExecutionHistory]
+              Resource: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:${DailyPlanStateMachine.Name}:*"
       Events:
         Proxy:
           Type: HttpApi

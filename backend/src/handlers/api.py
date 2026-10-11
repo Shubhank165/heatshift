@@ -130,7 +130,40 @@ def run_plan(fid, body, **_):
     if body.get("date"):
         payload["date"] = body["date"]
     ex = sfn.start_execution(stateMachineArn=STATE_MACHINE_ARN, input=json.dumps(payload))
-    return 202, {"execution_arn": ex["executionArn"]}
+    return 202, {"execution_arn": ex["executionArn"], "run": ex["executionArn"].rsplit(":", 1)[1]}
+
+
+STEPS = [("FetchForecast", "Fetch hourly forecast for every zone"),
+         ("ComputeHeatRisk", "Compute WBGT and risk band per zone-hour"),
+         ("PlanShifts", "Re-plan shifts, breaks and rest points"),
+         ("NotifyManager", "Send the manager brief")]
+
+
+def run_status(fid, run, **_):
+    """Live progress of a planning run, read from the Step Functions execution history."""
+    arn = STATE_MACHINE_ARN.replace(":stateMachine:", ":execution:") + ":" + run
+    ex = sfn.describe_execution(executionArn=arn)
+    state = {name: "pending" for name, _ in STEPS}
+    for e in sfn.get_paginator("get_execution_history").paginate(executionArn=arn).build_full_result()["events"]:
+        if e["type"] == "TaskStateEntered":
+            state[e["stateEnteredEventDetails"]["name"]] = "running"
+        elif e["type"] == "TaskStateExited":
+            state[e["stateExitedEventDetails"]["name"]] = "done"
+        elif e["type"] in ("LambdaFunctionFailed", "TaskFailed", "LambdaFunctionTimedOut"):
+            for name in state:
+                if state[name] == "running":
+                    state[name] = "retrying"
+    status = ex["status"]
+    if status == "FAILED":
+        for name in state:
+            if state[name] in ("running", "retrying"):
+                state[name] = "failed"
+    out = json.loads(ex.get("output") or "{}") if status == "SUCCEEDED" else {}
+    if "PlanFailed" in state:
+        state.pop("PlanFailed")
+    return 200, {"status": status, "date": out.get("date") or json.loads(ex["input"]).get("date"),
+                 "steps": [{"id": n, "label": l, "state": state[n]} for n, l in STEPS],
+                 "started_at": ex["startDate"].isoformat(), "kpis": out.get("kpis")}
 
 
 ROUTES = [
@@ -138,6 +171,7 @@ ROUTES = [
     ("GET", r"^/fleets/(?P<fid>[\w-]+)/plans/(?P<d>\d{4}-\d{2}-\d{2})$", get_plan),
     ("POST", r"^/fleets/(?P<fid>[\w-]+)/plans/(?P<d>\d{4}-\d{2}-\d{2})/approve$", approve_plan),
     ("POST", r"^/fleets/(?P<fid>[\w-]+)/plans$", run_plan),
+    ("GET", r"^/fleets/(?P<fid>[\w-]+)/runs/(?P<run>[\w-]+)$", run_status),
     ("GET", r"^/fleets/(?P<fid>[\w-]+)/workers/(?P<wid>\w+)/card$", worker_card),
     ("GET", r"^/fleets/(?P<fid>[\w-]+)/dispatch-check$", dispatch_check),
     ("POST", r"^/fleets/(?P<fid>[\w-]+)/overrides$", create_override),
@@ -148,6 +182,8 @@ ROUTES = [
 
 def handler(event, _ctx):
     method = event["requestContext"]["http"]["method"]
+    if method == "OPTIONS":  # CORS preflight: the ANY proxy route forwards it here
+        return {"statusCode": 204, "headers": {}, "body": ""}
     path = event["rawPath"].rstrip("/") or "/"
     body = json.loads(event.get("body") or "{}") if method in ("POST", "PUT") else {}
     query = event.get("queryStringParameters") or {}
