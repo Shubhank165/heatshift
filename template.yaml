@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: HeatShift - heat-safe shift planning for outdoor workers
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: Fleet manager email for daily briefs and unwell alerts (optional)
+  AppUrl:
+    Type: String
+    Default: ""
+    Description: Dashboard URL (Amplify Hosting) used in email briefs
+  FleetId:
+    Type: String
+    Default: demo-gurugram
+
+Conditions:
+  HasEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    CodeUri: backend/src/
+    MemorySize: 512
+    Timeout: 30
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref Table
+        DATA_BUCKET: !Ref DataBucket
+        ALERT_TOPIC_ARN: !Ref AlertTopic
+        APP_URL: !Ref AppUrl
+
+Resources:
+  # ---------- storage ----------
+  Table:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: raw-to-ia
+            Status: Enabled
+            Prefix: raw/
+            Transitions: [{ StorageClass: STANDARD_IA, TransitionInDays: 30 }]
+
+  # ---------- alerts ----------
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: HeatShift
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # ---------- daily-plan workflow ----------
+  FetchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.pipeline.fetch
+      Policies:
+        - DynamoDBReadPolicy: { TableName: !Ref Table }
+        - S3WritePolicy: { BucketName: !Ref DataBucket }
+
+  RiskFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.pipeline.risk
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref Table }
+        - S3ReadPolicy: { BucketName: !Ref DataBucket }
+
+  PlanFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.pipeline.plan
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref Table }
+
+  NotifyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.pipeline.notify
+      Policies:
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt AlertTopic.TopicName }
+
+  FailureFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.pipeline.failure
+      Policies:
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt AlertTopic.TopicName }
+
+  DailyPlanStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Definition:
+        Comment: Forecast -> heat risk -> shift plan -> manager brief
+        StartAt: FetchForecast
+        States:
+          FetchForecast:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters: { FunctionName: "${FetchArn}", Payload.$: "$" }
+            OutputPath: $.Payload
+            Retry: [{ ErrorEquals: [States.ALL], IntervalSeconds: 10, MaxAttempts: 3, BackoffRate: 2 }]
+            Catch: [{ ErrorEquals: [States.ALL], Next: PlanFailed }]
+            Next: ComputeHeatRisk
+          ComputeHeatRisk:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters: { FunctionName: "${RiskArn}", Payload.$: "$" }
+            OutputPath: $.Payload
+            Catch: [{ ErrorEquals: [States.ALL], Next: PlanFailed }]
+            Next: PlanShifts
+          PlanShifts:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters: { FunctionName: "${PlanArn}", Payload.$: "$" }
+            OutputPath: $.Payload
+            Catch: [{ ErrorEquals: [States.ALL], Next: PlanFailed }]
+            Next: NotifyManager
+          NotifyManager:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters: { FunctionName: "${NotifyArn}", Payload.$: "$" }
+            OutputPath: $.Payload
+            End: true
+          PlanFailed:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters: { FunctionName: "${FailureArn}", Payload.$: "$" }
+            Next: Failed
+          Failed:
+            Type: Fail
+      DefinitionSubstitutions:
+        FetchArn: !GetAtt FetchFunction.Arn
+        RiskArn: !GetAtt RiskFunction.Arn
+        PlanArn: !GetAtt PlanFunction.Arn
+        NotifyArn: !GetAtt NotifyFunction.Arn
+        FailureArn: !GetAtt FailureFunction.Arn
+      Policies:
+        - LambdaInvokePolicy: { FunctionName: !Ref FetchFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref RiskFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref PlanFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref NotifyFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref FailureFunction }
+      Events:
+        EveningPlan:   # 18:00 IST: plan tomorrow
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 18 * * ? *)
+            ScheduleExpressionTimezone: Asia/Kolkata
+            Input: !Sub '{"fleet_id": "${FleetId}", "date_offset": 1}'
+        MorningRefresh:   # 05:30 IST: re-plan today with the freshest forecast
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(30 5 * * ? *)
+            ScheduleExpressionTimezone: Asia/Kolkata
+            Input: !Sub '{"fleet_id": "${FleetId}", "date_offset": 0}'
+
+  PlanFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Daily heat plan workflow failed
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions: [{ Name: StateMachineArn, Value: !Ref DailyPlanStateMachine }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  # ---------- API ----------
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowMethods: [GET, POST, PUT, OPTIONS]
+        AllowHeaders: [content-type]
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers.api.handler
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref DailyPlanStateMachine
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref Table }
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt AlertTopic.TopicName }
+        - StepFunctionsExecutionPolicy: { StateMachineName: !GetAtt DailyPlanStateMachine.Name }
+      Events:
+        Proxy:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: "/{proxy+}", Method: ANY }
+
+Outputs:
+  ApiUrl:
+    Value: !GetAtt HttpApi.ApiEndpoint
+  TableName:
+    Value: !Ref Table
+  StateMachineArn:
+    Value: !Ref DailyPlanStateMachine
+  AlertTopicArn:
+    Value: !Ref AlertTopic
